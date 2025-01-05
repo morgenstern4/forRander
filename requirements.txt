@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pymongo
+requests
+python-dotenv
+passlib
+jose
