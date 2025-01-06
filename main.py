@@ -8,18 +8,18 @@ import os
 import requests
 from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
+
 # FastAPI instance
 app = FastAPI()
 
-# Load environment variables for Cloudinary
-load_dotenv()
-
 # Cloudinary Configuration
-CLOUDINARY_URL = os.getenv("CLOUDINARY_URL=cloudinary://457627976654174:nJKtU6wRmT9zy3rK4bfegWHfA18@ddjnsikcv")
+CLOUDINARY_URL = os.getenv("CLOUDINARY_URL")
 CLOUDINARY_UPLOAD_URL = f"{CLOUDINARY_URL}/image/upload"
 
 # MongoDB connection setup
-MONGO_URI = "mongodb+srv://userForAPI:ABCDef123@mongoyoutube.7o7fj.mongodb.net/?retryWrites=true&w=majority&appName=MongoYoutube"  # Replace with your MongoDB connection string
+MONGO_URI = os.getenv("MONGO_URI")  # Use the environment variable
 client = MongoClient(MONGO_URI)
 db = client["demo_app"]
 users_collection = db["users"]
@@ -30,8 +30,8 @@ memories_collection = db["memories"]
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT setup
-SECRET_KEY = "e1f5d5a93f5e45c4b3c9bfec2af4e5ab59f3df2f1edc4f9f8c7c9a7e7b2d5e3f"  # Replace with a strong secret key
-ALGORITHM = "HS256"
+SECRET_KEY = os.getenv("SECRET_KEY")  # Use the environment variable
+ALGORITHM = os.getenv("ALGORITHM")    # Use the environment variable
 
 # Models
 class User(BaseModel):
@@ -141,3 +141,8 @@ async def fetch_memories(group_name: str):
         {"url": memory["url"], "uploader": memory["uploader"], "filename": memory["filename"]}
         for memory in memories
     ]
+
+# Uvicorn Configuration for Render Hosting
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
