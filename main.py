@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from jose import jwt, JWTError
 from passlib.context import CryptContext
@@ -7,23 +8,35 @@ from uuid import uuid4
 import os
 import requests
 from dotenv import load_dotenv
-import logging
 
-# Load environment variables
 load_dotenv()
 
-# Logging setup
-logging.basicConfig(level=logging.INFO)
-
-# FastAPI instance
+# Initialize FastAPI
 app = FastAPI()
 
-# Cloudinary Configuration
-CLOUDINARY_URL = os.getenv("CLOUDINARY_URL", "https://default.cloudinary.url")
-CLOUDINARY_UPLOAD_URL = f"{CLOUDINARY_URL}/image/upload"
+# Add CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Replace with specific origins in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# MongoDB connection setup
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+
+allowed_origins = [
+    "http://localhost:3000",  # For Flutter running on localhost
+    "http://127.0.0.1:3000",  # Another common localhost address
+    "https://your-flutter-app.com",  # Deployed Flutter app
+]
+
+
+
+# Cloudinary configuration
+CLOUDINARY_UPLOAD_URL = "https://api.cloudinary.com/v1_1/ddjnsikcv/image/upload"
+
+# MongoDB configuration
+MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["demo_app"]
 users_collection = db["users"]
@@ -34,17 +47,83 @@ memories_collection = db["memories"]
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT setup
-SECRET_KEY = os.getenv("SECRET_KEY", "defaultsecretkey")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = "HS256"
 
-# Log missing variables
-if not SECRET_KEY or not CLOUDINARY_URL or not MONGO_URI:
-    logging.error("Critical environment variables missing. Check your configuration.")
+# Models
+class User(BaseModel):
+    email: EmailStr
+    password: str
 
-# Models and utility functions remain unchanged...
+class Group(BaseModel):
+    group_name: str
 
-# Uvicorn Configuration for Render Hosting
-if __name__ == "__main__":
-    logging.info("Starting the FastAPI application...")
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+class JoinGroup(BaseModel):
+    group_name: str
+    password: str
+
+# Utilities
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, hashed: str) -> bool:
+    return pwd_context.verify(password, hashed)
+
+def create_jwt(data: dict) -> str:
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+
+def decode_jwt(token: str) -> dict:
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+# Routes
+@app.post("/signup")
+async def signup(user: User):
+    if users_collection.find_one({"email": user.email}):
+        raise HTTPException(status_code=400, detail="Email already exists")
+    users_collection.insert_one({"email": user.email, "password": hash_password(user.password)})
+    return {"message": "Signup successful"}
+
+@app.post("/login")
+async def login(user: User):
+    db_user = users_collection.find_one({"email": user.email})
+    if not db_user or not verify_password(user.password, db_user["password"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"access_token": create_jwt({"sub": user.email})}
+
+@app.post("/create-group")
+async def create_group(group: Group, token: str = Depends(decode_jwt)):
+    if groups_collection.find_one({"group_name": group.group_name}):
+        raise HTTPException(status_code=400, detail="Group already exists")
+    groups_collection.insert_one({
+        "group_name": group.group_name,
+        "password": str(uuid4())[:8],
+        "members": [token["sub"]]
+    })
+    return {"message": "Group created"}
+
+@app.post("/join-group")
+async def join_group(data: JoinGroup, token: str = Depends(decode_jwt)):
+    group = groups_collection.find_one({"group_name": data.group_name})
+    if not group or group["password"] != data.password:
+        raise HTTPException(status_code=400, detail="Invalid group name or password")
+    if token["sub"] not in group["members"]:
+        groups_collection.update_one({"group_name": data.group_name}, {"$push": {"members": token["sub"]}})
+    return {"message": "Joined group"}
+
+@app.post("/upload-memory")
+async def upload_memory(file: UploadFile = File(...), group_name: str = Form(...), uploader: str = Form(...)):
+    try:
+        response = requests.post(CLOUDINARY_UPLOAD_URL, files={"file": (file.filename, await file.read())})
+        response.raise_for_status()
+        cloudinary_url = response.json()["secure_url"]
+        memories_collection.insert_one({"group_name": group_name, "uploader": uploader, "url": cloudinary_url})
+        return {"message": "Memory uploaded", "url": cloudinary_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/fetch-memories/{group_name}")
+async def fetch_memories(group_name: str):
+    return [{"url": m["url"], "uploader": m["uploader"]} for m in memories_collection.find({"group_name": group_name})]
