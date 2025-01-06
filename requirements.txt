@@ -1,7 +1,8 @@
 fastapi
 uvicorn
+pydantic
 pymongo
-requests
 python-dotenv
 passlib
 jose
+requests
