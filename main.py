@@ -23,18 +23,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-allowed_origins = [
-    "http://localhost:3000",  # For Flutter running on localhost
-    "http://127.0.0.1:3000",  # Another common localhost address
-    "https://your-flutter-app.com",  # Deployed Flutter app
-]
-
-
-
-# Cloudinary configuration
-CLOUDINARY_UPLOAD_URL = "https://api.cloudinary.com/v1_1/ddjnsikcv/image/upload"
-
 # MongoDB configuration
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
@@ -91,6 +79,7 @@ async def login(user: User):
     db_user = users_collection.find_one({"email": user.email})
     if not db_user or not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    # Create JWT token and return it
     return {"access_token": create_jwt({"sub": user.email})}
 
 @app.post("/create-group")
@@ -116,7 +105,7 @@ async def join_group(data: JoinGroup, token: str = Depends(decode_jwt)):
 @app.post("/upload-memory")
 async def upload_memory(file: UploadFile = File(...), group_name: str = Form(...), uploader: str = Form(...)):
     try:
-        response = requests.post(CLOUDINARY_UPLOAD_URL, files={"file": (file.filename, await file.read())})
+        response = requests.post("https://api.cloudinary.com/v1_1/ddjnsikcv/image/upload", files={"file": (file.filename, await file.read())})
         response.raise_for_status()
         cloudinary_url = response.json()["secure_url"]
         memories_collection.insert_one({"group_name": group_name, "uploader": uploader, "url": cloudinary_url})
@@ -126,4 +115,7 @@ async def upload_memory(file: UploadFile = File(...), group_name: str = Form(...
 
 @app.get("/fetch-memories/{group_name}")
 async def fetch_memories(group_name: str):
-    return [{"url": m["url"], "uploader": m["uploader"]} for m in memories_collection.find({"group_name": group_name})]
+    memories = [{"url": m["url"], "uploader": m["uploader"]} for m in memories_collection.find({"group_name": group_name})]
+    if not memories:
+        raise HTTPException(status_code=404, detail="No memories found")
+    return memories
