@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from jose import jwt, JWTError
 from passlib.context import CryptContext
@@ -66,6 +68,9 @@ def decode_jwt(token: str) -> dict:
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+# Serve the uploaded files
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 # Routes
 @app.post("/signup")
 async def signup(user: User):
@@ -108,4 +113,43 @@ async def join_group(data: JoinGroup, authorization: str = Header(...)):
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    group = groups_collection.find
+    group = groups_collection.find_one({"group_name": data.group_name})
+    if not group or group["password"] != data.password:
+        raise HTTPException(status_code=400, detail="Invalid group or password")
+
+    groups_collection.update_one(
+        {"group_name": data.group_name},
+        {"$addToSet": {"members": decoded_token["sub"]}}
+    )
+    return {"message": f"Joined group {data.group_name} successfully"}
+
+@app.post("/upload-memory/{group_name}")
+async def upload_memory(group_name: str, file: UploadFile = File(...), authorization: str = Header(...)):
+    # Authenticate user with JWT
+    try:
+        token = authorization.split(" ")[1]
+        decoded_token = decode_jwt(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Generate a unique filename for the image
+    file_extension = file.filename.split(".")[-1]
+    file_name = f"{uuid4()}.{file_extension}"
+    file_path = os.path.join("uploads", file_name)
+
+    # Ensure the directory exists
+    os.makedirs("uploads", exist_ok=True)
+
+    # Save the uploaded file
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+
+    # Save the memory to the database
+    memory_data = {
+        "group_name": group_name,
+        "url": f"/uploads/{file_name}",  # Adjust this based on how you serve static files
+        "uploader": decoded_token["sub"],
+    }
+    memories_collection.insert_one(memory_data)
+
+    return JSONResponse(content={"message": "Image uploaded successfully", "url": f"/uploads/{file_name}"})
