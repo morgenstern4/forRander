@@ -79,14 +79,12 @@ async def login(user: User):
     db_user = users_collection.find_one({"email": user.email})
     if not db_user or not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    # Create JWT token and return it
     return {"access_token": create_jwt({"sub": user.email})}
 
 @app.post("/create-group")
 async def create_group(group: Group, authorization: str = Header(...)):
     try:
-        # Extract and decode the token
-        token = authorization.split(" ")[1]  # Assumes "Bearer <token>"
+        token = authorization.split(" ")[1]
         decoded_token = decode_jwt(token)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -94,7 +92,7 @@ async def create_group(group: Group, authorization: str = Header(...)):
     if groups_collection.find_one({"group_name": group.group_name}):
         raise HTTPException(status_code=400, detail="Group already exists")
 
-    password = str(uuid4())[:8]  # Generate group password
+    password = str(uuid4())[:8]
     groups_collection.insert_one({
         "group_name": group.group_name,
         "password": password,
@@ -105,33 +103,9 @@ async def create_group(group: Group, authorization: str = Header(...)):
 @app.post("/join-group")
 async def join_group(data: JoinGroup, authorization: str = Header(...)):
     try:
-        # Extract and decode the token
-        token = authorization.split(" ")[1]  # Assumes "Bearer <token>"
+        token = authorization.split(" ")[1]
         decoded_token = decode_jwt(token)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    group = groups_collection.find_one({"group_name": data.group_name})
-    if not group or group["password"] != data.password:
-        raise HTTPException(status_code=400, detail="Invalid group name or password")
-    if decoded_token["sub"] not in group["members"]:
-        groups_collection.update_one({"group_name": data.group_name}, {"$push": {"members": decoded_token["sub"]}})
-    return {"message": "Joined group"}
-
-@app.post("/upload-memory")
-async def upload_memory(file: UploadFile = File(...), group_name: str = Form(...), uploader: str = Form(...)):
-    try:
-        response = requests.post("https://api.cloudinary.com/v1_1/ddjnsikcv/image/upload", files={"file": (file.filename, await file.read())})
-        response.raise_for_status()
-        cloudinary_url = response.json()["secure_url"]
-        memories_collection.insert_one({"group_name": group_name, "uploader": uploader, "url": cloudinary_url})
-        return {"message": "Memory uploaded", "url": cloudinary_url}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/fetch-memories/{group_name}")
-async def fetch_memories(group_name: str):
-    memories = [{"url": m["url"], "uploader": m["uploader"]} for m in memories_collection.find({"group_name": group_name})]
-    if not memories:
-        raise HTTPException(status_code=404, detail="No memories found")
-    return memories
+    group = groups_collection.find
