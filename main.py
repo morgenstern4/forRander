@@ -13,6 +13,7 @@ from uuid import uuid4
 import os
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 # Initialize FastAPI
@@ -77,7 +78,16 @@ def decode_jwt(token: str) -> dict:
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+def extract_token(authorization: str) -> str:
+    if not authorization or " " not in authorization:
+        raise HTTPException(status_code=401, detail="Invalid Authorization header")
+    return authorization.split(" ")[1]
+
 # Routes
+@app.get("/")
+def read_root():
+    return {"message": "API is running"}
+
 @app.post("/signup")
 async def signup(user: User):
     if users_collection.find_one({"email": user.email}):
@@ -94,11 +104,8 @@ async def login(user: User):
 
 @app.post("/create-group")
 async def create_group(group: Group, authorization: str = Header(...)):
-    try:
-        token = authorization.split(" ")[1]
-        decoded_token = decode_jwt(token)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
 
     if groups_collection.find_one({"group_name": group.group_name}):
         raise HTTPException(status_code=400, detail="Group already exists")
@@ -113,11 +120,8 @@ async def create_group(group: Group, authorization: str = Header(...)):
 
 @app.post("/join-group")
 async def join_group(data: JoinGroup, authorization: str = Header(...)):
-    try:
-        token = authorization.split(" ")[1]
-        decoded_token = decode_jwt(token)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
 
     group = groups_collection.find_one({"group_name": data.group_name})
     if not group or group["password"] != data.password:
@@ -131,21 +135,15 @@ async def join_group(data: JoinGroup, authorization: str = Header(...)):
 
 @app.post("/upload-memory/{group_name}")
 async def upload_memory(group_name: str, file: UploadFile = File(...), authorization: str = Header(...)):
-    # Authenticate user with JWT
-    try:
-        token = authorization.split(" ")[1]
-        decoded_token = decode_jwt(token)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
 
-    # Upload file to Cloudinary
     try:
         cloudinary_response = cloudinary.uploader.upload(file.file, folder="memories/")
         file_url = cloudinary_response['secure_url']
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
 
-    # Save memory to the database with Cloudinary URL
     memory_data = {
         "group_name": group_name,
         "url": file_url,
@@ -155,26 +153,19 @@ async def upload_memory(group_name: str, file: UploadFile = File(...), authoriza
 
     return JSONResponse(content={"message": "Image uploaded successfully", "url": file_url})
 
-@app.get("/get-memories/{group_name}")
+@app.get("/memories/{group_name}")
 async def get_memories(group_name: str, authorization: str = Header(...)):
-    # Authenticate user with JWT
-    try:
-        token = authorization.split(" ")[1]
-        decoded_token = decode_jwt(token)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
 
-    # Query the database for memories of the group
-    try:
-        memories = list(memories_collection.find({"group_name": group_name}))
-        if not memories:
-            return {"message": "No memories found", "data": []}
+    memories = list(memories_collection.find({"group_name": group_name}))
+    for memory in memories:
+        memory["_id"] = str(memory["_id"])
+    return {"data": memories}
 
-        # Format the response
-        for memory in memories:
-            memory["_id"] = str(memory["_id"])  # Convert ObjectId to string for JSON serialization
-
-        return {"message": "Success", "data": memories}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load memories: {str(e)}")
-
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"message": "An unexpected error occurred", "details": str(exc)},
+    )
