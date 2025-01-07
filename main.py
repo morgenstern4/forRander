@@ -93,12 +93,14 @@ async def create_group(group: Group, authorization: str = Header(...)):
 
     if groups_collection.find_one({"group_name": group.group_name}):
         raise HTTPException(status_code=400, detail="Group already exists")
+
+    password = str(uuid4())[:8]  # Generate group password
     groups_collection.insert_one({
         "group_name": group.group_name,
-        "password": str(uuid4())[:8],
+        "password": password,
         "members": [decoded_token["sub"]]
     })
-    return {"message": "Group created"}
+    return {"message": "Group created", "group_name": group.group_name, "password": password}
 
 @app.post("/join-group")
 async def join_group(data: JoinGroup, authorization: str = Header(...)):
