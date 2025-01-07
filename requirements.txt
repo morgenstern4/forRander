@@ -8,3 +8,4 @@ python-jose>=3.3.0
 requests>=2.28.1
 email-validator>=1.0.0
 python-multipart>=0.0.5
+cloudinary>=1.27.0
