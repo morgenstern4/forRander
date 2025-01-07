@@ -1,3 +1,6 @@
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -8,7 +11,6 @@ from passlib.context import CryptContext
 from pymongo import MongoClient
 from uuid import uuid4
 import os
-import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,6 +42,13 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 
+# Cloudinary configuration
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET")
+)
+
 # Models
 class User(BaseModel):
     email: EmailStr
@@ -67,9 +76,6 @@ def decode_jwt(token: str) -> dict:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
-
-# Serve the uploaded files
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Routes
 @app.post("/signup")
@@ -132,24 +138,19 @@ async def upload_memory(group_name: str, file: UploadFile = File(...), authoriza
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    # Generate a unique filename for the image
-    file_extension = file.filename.split(".")[-1]
-    file_name = f"{uuid4()}.{file_extension}"
-    file_path = os.path.join("uploads", file_name)
+    # Upload file to Cloudinary
+    try:
+        cloudinary_response = cloudinary.uploader.upload(file.file, folder="memories/")
+        file_url = cloudinary_response['secure_url']
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
 
-    # Ensure the directory exists
-    os.makedirs("uploads", exist_ok=True)
-
-    # Save the uploaded file
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-
-    # Save the memory to the database
+    # Save memory to the database with Cloudinary URL
     memory_data = {
         "group_name": group_name,
-        "url": f"/uploads/{file_name}",  # Adjust this based on how you serve static files
+        "url": file_url,
         "uploader": decoded_token["sub"],
     }
     memories_collection.insert_one(memory_data)
 
-    return JSONResponse(content={"message": "Image uploaded successfully", "url": f"/uploads/{file_name}"})
+    return JSONResponse(content={"message": "Image uploaded successfully", "url": file_url})
