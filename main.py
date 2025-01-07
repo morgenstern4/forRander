@@ -10,6 +10,7 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from pymongo import MongoClient
 from uuid import uuid4
+from typing import List, Dict
 import os
 from dotenv import load_dotenv
 
@@ -64,46 +65,55 @@ class JoinGroup(BaseModel):
 
 # Utilities
 def hash_password(password: str) -> str:
+    """Hash the password using bcrypt."""
     return pwd_context.hash(password)
 
 def verify_password(password: str, hashed: str) -> bool:
+    """Verify the password against the hashed value."""
     return pwd_context.verify(password, hashed)
 
 def create_jwt(data: dict) -> str:
+    """Create a JWT token."""
     return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
 
 def decode_jwt(token: str) -> dict:
+    """Decode a JWT token."""
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 def extract_token(authorization: str) -> str:
+    """Extract the token from the Authorization header."""
     if not authorization or " " not in authorization:
         raise HTTPException(status_code=401, detail="Invalid Authorization header")
     return authorization.split(" ")[1]
 
 # Routes
 @app.get("/")
-def read_root():
+def read_root() -> Dict[str, str]:
+    """Root endpoint to check if the API is running."""
     return {"message": "API is running"}
 
 @app.post("/signup")
-async def signup(user: User):
+async def signup(user: User) -> Dict[str, str]:
+    """Endpoint for user signup."""
     if users_collection.find_one({"email": user.email}):
         raise HTTPException(status_code=400, detail="Email already exists")
     users_collection.insert_one({"email": user.email, "password": hash_password(user.password)})
     return {"message": "Signup successful"}
 
 @app.post("/login")
-async def login(user: User):
+async def login(user: User) -> Dict[str, str]:
+    """Endpoint for user login."""
     db_user = users_collection.find_one({"email": user.email})
     if not db_user or not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"access_token": create_jwt({"sub": user.email})}
 
 @app.post("/create-group")
-async def create_group(group: Group, authorization: str = Header(...)):
+async def create_group(group: Group, authorization: str = Header(...)) -> Dict[str, str]:
+    """Endpoint to create a new group."""
     token = extract_token(authorization)
     decoded_token = decode_jwt(token)
 
@@ -119,7 +129,8 @@ async def create_group(group: Group, authorization: str = Header(...)):
     return {"message": "Group created", "group_name": group.group_name, "password": password}
 
 @app.post("/join-group")
-async def join_group(data: JoinGroup, authorization: str = Header(...)):
+async def join_group(data: JoinGroup, authorization: str = Header(...)) -> Dict[str, str]:
+    """Endpoint to join an existing group."""
     token = extract_token(authorization)
     decoded_token = decode_jwt(token)
 
@@ -134,7 +145,8 @@ async def join_group(data: JoinGroup, authorization: str = Header(...)):
     return {"message": f"Joined group {data.group_name} successfully"}
 
 @app.post("/upload-memory/{group_name}")
-async def upload_memory(group_name: str, file: UploadFile = File(...), authorization: str = Header(...)):
+async def upload_memory(group_name: str, file: UploadFile = File(...), authorization: str = Header(...)) -> JSONResponse:
+    """Endpoint to upload a memory (image) to Cloudinary and save the URL in the database."""
     token = extract_token(authorization)
     decoded_token = decode_jwt(token)
 
@@ -154,7 +166,8 @@ async def upload_memory(group_name: str, file: UploadFile = File(...), authoriza
     return JSONResponse(content={"message": "Image uploaded successfully", "url": file_url})
 
 @app.get("/memories/{group_name}")
-async def get_memories(group_name: str, authorization: str = Header(...)):
+async def get_memories(group_name: str, authorization: str = Header(...)) -> Dict[str, List[Dict[str, str]]]:
+    """Endpoint to get all memories for a specific group."""
     token = extract_token(authorization)
     decoded_token = decode_jwt(token)
 
@@ -164,7 +177,8 @@ async def get_memories(group_name: str, authorization: str = Header(...)):
     return {"data": memories}
 
 @app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
+async def general_exception_handler(request, exc) -> JSONResponse:
+    """General exception handler."""
     return JSONResponse(
         status_code=500,
         content={"message": "An unexpected error occurred", "details": str(exc)},
