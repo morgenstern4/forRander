@@ -154,3 +154,27 @@ async def upload_memory(group_name: str, file: UploadFile = File(...), authoriza
     memories_collection.insert_one(memory_data)
 
     return JSONResponse(content={"message": "Image uploaded successfully", "url": file_url})
+
+@app.get("/get-memories/{group_name}")
+async def get_memories(group_name: str, authorization: str = Header(...)):
+    # Authenticate user with JWT
+    try:
+        token = authorization.split(" ")[1]
+        decoded_token = decode_jwt(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Query the database for memories of the group
+    try:
+        memories = list(memories_collection.find({"group_name": group_name}))
+        if not memories:
+            return {"message": "No memories found", "data": []}
+
+        # Format the response
+        for memory in memories:
+            memory["_id"] = str(memory["_id"])  # Convert ObjectId to string for JSON serialization
+
+        return {"message": "Success", "data": memories}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load memories: {str(e)}")
+
