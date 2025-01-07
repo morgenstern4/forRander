@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from jose import jwt, JWTError
@@ -83,23 +83,37 @@ async def login(user: User):
     return {"access_token": create_jwt({"sub": user.email})}
 
 @app.post("/create-group")
-async def create_group(group: Group, token: str = Depends(decode_jwt)):
+async def create_group(group: Group, authorization: str = Header(...)):
+    try:
+        # Extract and decode the token
+        token = authorization.split(" ")[1]  # Assumes "Bearer <token>"
+        decoded_token = decode_jwt(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
     if groups_collection.find_one({"group_name": group.group_name}):
         raise HTTPException(status_code=400, detail="Group already exists")
     groups_collection.insert_one({
         "group_name": group.group_name,
         "password": str(uuid4())[:8],
-        "members": [token["sub"]]
+        "members": [decoded_token["sub"]]
     })
     return {"message": "Group created"}
 
 @app.post("/join-group")
-async def join_group(data: JoinGroup, token: str = Depends(decode_jwt)):
+async def join_group(data: JoinGroup, authorization: str = Header(...)):
+    try:
+        # Extract and decode the token
+        token = authorization.split(" ")[1]  # Assumes "Bearer <token>"
+        decoded_token = decode_jwt(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
     group = groups_collection.find_one({"group_name": data.group_name})
     if not group or group["password"] != data.password:
         raise HTTPException(status_code=400, detail="Invalid group name or password")
-    if token["sub"] not in group["members"]:
-        groups_collection.update_one({"group_name": data.group_name}, {"$push": {"members": token["sub"]}})
+    if decoded_token["sub"] not in group["members"]:
+        groups_collection.update_one({"group_name": data.group_name}, {"$push": {"members": decoded_token["sub"]}})
     return {"message": "Joined group"}
 
 @app.post("/upload-memory")
