@@ -99,17 +99,24 @@ def read_root() -> Dict[str, str]:
 @app.post("/signup")
 async def signup(user: User) -> Dict[str, str]:
     """Endpoint for user signup."""
+    # Check if the email already exists
     if users_collection.find_one({"email": user.email}):
         raise HTTPException(status_code=400, detail="Email already exists")
+    # Insert new user into the database
     users_collection.insert_one({"email": user.email, "password": hash_password(user.password)})
     return {"message": "Signup successful"}
 
 @app.post("/login")
 async def login(user: User) -> Dict[str, str]:
     """Endpoint for user login."""
+    # Log the request body for debugging
+    print(f"Login attempt for user: {user.email}")
+
     db_user = users_collection.find_one({"email": user.email})
     if not db_user or not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Create JWT token and return it
     return {"access_token": create_jwt({"sub": user.email})}
 
 @app.post("/create-group")
@@ -118,9 +125,11 @@ async def create_group(group: Group, authorization: str = Header(...)) -> Dict[s
     token = extract_token(authorization)
     decoded_token = decode_jwt(token)
 
+    # Check if the group already exists
     if groups_collection.find_one({"group_name": group.group_name}):
         raise HTTPException(status_code=400, detail="Group already exists")
 
+    # Create a password for the group and add the creator as a member
     password = str(uuid4())[:8]
     groups_collection.insert_one({
         "group_name": group.group_name,
@@ -154,7 +163,7 @@ async def upload_memory(group_name: str, file: UploadFile = File(...), authoriza
     try:
         # Log file upload attempt
         print(f"Attempting to upload file for group: {group_name}")
-        
+
         cloudinary_response = cloudinary.uploader.upload(file.file, folder="memories/")
         file_url = cloudinary_response['secure_url']
 
@@ -173,7 +182,6 @@ async def upload_memory(group_name: str, file: UploadFile = File(...), authoriza
     memories_collection.insert_one(memory_data)
 
     return JSONResponse(content={"message": "Image uploaded successfully", "url": file_url})
-
 
 @app.get("/memories/{group_name}")
 async def get_memories(group_name: str, authorization: str = Header(...)) -> Dict[str, List[Dict[str, str]]]:
