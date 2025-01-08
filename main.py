@@ -154,34 +154,43 @@ async def join_group(data: JoinGroup, authorization: str = Header(...)) -> Dict[
     )
     return {"message": f"Joined group {data.group_name} successfully"}
 
-@app.post("/upload-memory/{group_name}")
-async def upload_memory(group_name: str, file: UploadFile = File(...), authorization: str = Header(...)) -> JSONResponse:
-    """Endpoint to upload a memory (image) to Cloudinary and save the URL in the database."""
-    token = extract_token(authorization)
-    decoded_token = decode_jwt(token)
+import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'dart:typed_data';
+import 'dart:convert';
+import 'dart:io';
 
-    try:
-        # Log file upload attempt
-        print(f"Attempting to upload file for group: {group_name}")
+Future<void> uploadMemory(File file, String groupName, String token) async {
+  try {
+    var uri = Uri.parse('http://localhost:8000/upload-memory/$groupName');
+    var request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer $token';
 
-        cloudinary_response = cloudinary.uploader.upload(file.file, folder="memories/")
-        file_url = cloudinary_response['secure_url']
+    // Read the file content
+    var fileBytes = await file.readAsBytes();
 
-        # Log successful upload
-        print(f"Upload successful. URL: {file_url}")
-    except Exception as e:
-        # Log failure and return detailed message
-        print(f"Cloudinary upload failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
+    // Attach the file
+    var multipartFile = http.MultipartFile.fromBytes(
+      'file',
+      fileBytes,
+      filename: file.uri.pathSegments.last,
+      contentType: MediaType('image', 'jpeg'), // or appropriate type for your file
+    );
+    
+    request.files.add(multipartFile);
 
-    memory_data = {
-        "group_name": group_name,
-        "url": file_url,
-        "uploader": decoded_token["sub"],
+    var response = await request.send();
+    
+    if (response.statusCode == 200) {
+      print("Upload successful!");
+    } else {
+      print("Upload failed with status code: ${response.statusCode}");
     }
-    memories_collection.insert_one(memory_data)
+  } catch (e) {
+    print("Error uploading image: $e");
+  }
+}
 
-    return JSONResponse(content={"message": "Image uploaded successfully", "url": file_url})
 
 @app.get("/memories/{group_name}")
 async def get_memories(group_name: str, authorization: str = Header(...)) -> Dict[str, List[Dict[str, str]]]:
