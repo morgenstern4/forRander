@@ -1,4 +1,5 @@
 import os
+from fastapi.responses import JSONResponse
 from fastapi import FastAPI, HTTPException, File, UploadFile, Depends
 from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordBearer
