@@ -10,6 +10,7 @@ import cloudinary.uploader
 from dotenv import load_dotenv
 import logging
 import motor.motor_asyncio
+from passlib.context import CryptContext  # For password hashing
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,6 +40,9 @@ cloudinary.config(
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
 db = client["MongoYoutube"]  # Replace with the actual database name
 
+# Initialize password context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 app = FastAPI()
 
 # OAuth2PasswordBearer for token extraction
@@ -48,6 +52,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 class User(BaseModel):
     username: str
     email: str
+    password: str  # Add password field for registration
 
 class Group(BaseModel):
     name: str
@@ -69,13 +74,46 @@ def decode_jwt(token: str):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+# Hash password utility
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
 # Endpoint to authenticate the user and return a JWT token
 @app.post("/token")
 async def login(user: User):
-    # This is a simplified login method, replace with actual authentication
+    db_user = await db.users.find_one({"username": user.username})
+    if db_user is None or not verify_password(user.password, db_user["password"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
     user_data = {"sub": user.username}
     token = create_jwt(user_data)
     return {"access_token": token, "token_type": "bearer"}
+
+
+# Endpoint to register a new user
+@app.post("/register")
+async def register(user: User):
+    # Check if the user already exists
+    existing_user = await db.users.find_one({"username": user.username})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already taken")
+
+    # Hash the password before storing it
+    hashed_password = hash_password(user.password)
+    
+    user_data = {
+        "username": user.username,
+        "email": user.email,
+        "password": hashed_password
+    }
+    
+    # Save user in the database
+    await db.users.insert_one(user_data)
+    return {"message": "User registered successfully"}
 
 
 # Helper function to get the current user from the token
@@ -97,7 +135,7 @@ async def create_group(group: Group, current_user: dict = Depends(get_current_us
 
 
 # Endpoint to upload a memory (photo/video)
-@app.post("/memories/")
+@app.post("/memories/") 
 async def upload_memory(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     # Check file size
     contents = await file.read(MAX_FILE_SIZE + 1)
