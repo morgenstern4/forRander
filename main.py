@@ -1,177 +1,195 @@
-import os
-from fastapi.responses import JSONResponse
-from fastapi import FastAPI, HTTPException, File, UploadFile, Depends
-from pydantic import BaseModel
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from datetime import datetime, timedelta
 import cloudinary
 import cloudinary.uploader
+import cloudinary.api
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Header
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, EmailStr
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+from pymongo import MongoClient
+from uuid import uuid4
+from typing import List, Dict
+import os
 from dotenv import load_dotenv
-import logging
-import motor.motor_asyncio
-from passlib.context import CryptContext  # For password hashing
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Initialize logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# MongoDB and Cloudinary settings
-MONGO_URI = os.getenv("MONGO_URI")
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")
-CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
-CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
-CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
-
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB max file size
-
-# Initialize Cloudinary
-cloudinary.config(
-    cloud_name=CLOUDINARY_CLOUD_NAME,
-    api_key=CLOUDINARY_API_KEY,
-    api_secret=CLOUDINARY_API_SECRET
-)
-
-# Initialize MongoDB client and specify the database
-client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
-db = client["MongoYoutube"]  # Replace with the actual database name
-
-# Initialize password context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
+# Initialize FastAPI
 app = FastAPI()
 
-# OAuth2PasswordBearer for token extraction
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# Add CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Replace with specific origins in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Pydantic models
+# MongoDB configuration
+MONGO_URI = os.getenv("MONGO_URI")
+client = MongoClient(MONGO_URI)
+db = client["demo_app"]
+users_collection = db["users"]
+groups_collection = db["groups"]
+memories_collection = db["memories"]
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# JWT setup
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = "HS256"
+
+# Cloudinary configuration
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+    secure = True,
+)
+
+# Models
 class User(BaseModel):
-    username: str
-    email: str
-    password: str  # Add password field for registration
-
-class Group(BaseModel):
-    name: str
+    email: EmailStr
     password: str
 
+class Group(BaseModel):
+    group_name: str
 
-# Utility functions for JWT
+class JoinGroup(BaseModel):
+    group_name: str
+    password: str
+
+# Utilities
+def hash_password(password: str) -> str:
+    """Hash the password using bcrypt."""
+    return pwd_context.hash(password)
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify the password against the hashed value."""
+    return pwd_context.verify(password, hashed)
+
 def create_jwt(data: dict) -> str:
-    expire = datetime.utcnow() + timedelta(hours=1)
-    to_encode = data.copy()
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    """Create a JWT token."""
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
 
-def decode_jwt(token: str):
+def decode_jwt(token: str) -> dict:
+    """Decode a JWT token."""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+def extract_token(authorization: str) -> str:
+    """Extract the token from the Authorization header."""
+    if not authorization or " " not in authorization:
+        raise HTTPException(status_code=401, detail="Invalid Authorization header")
+    return authorization.split(" ")[1]
 
-# Hash password utility
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+# Routes
+@app.get("/")
+def read_root() -> Dict[str, str]:
+    """Root endpoint to check if the API is running."""
+    return {"message": "API is running"}
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+@app.post("/signup")
+async def signup(user: User) -> Dict[str, str]:
+    """Endpoint for user signup."""
+    if users_collection.find_one({"email": user.email}):
+        raise HTTPException(status_code=400, detail="Email already exists")
+    users_collection.insert_one({"email": user.email, "password": hash_password(user.password)})
+    return {"message": "Signup successful"}
 
-
-# Endpoint to authenticate the user and return a JWT token
-@app.post("/token")
-async def login(user: User):
-    db_user = await db.users.find_one({"username": user.username})
-    if db_user is None or not verify_password(user.password, db_user["password"]):
+@app.post("/login")
+async def login(user: User) -> Dict[str, str]:
+    """Endpoint for user login."""
+    db_user = users_collection.find_one({"email": user.email})
+    if not db_user or not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"access_token": create_jwt({"sub": user.email})}
 
-    user_data = {"sub": user.username}
-    token = create_jwt(user_data)
-    return {"access_token": token, "token_type": "bearer"}
+@app.post("/create-group")
+async def create_group(group: Group, authorization: str = Header(...)) -> Dict[str, str]:
+    """Endpoint to create a new group."""
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
 
-
-# Endpoint to register a new user
-@app.post("/register")
-async def register(user: User):
-    # Check if the user already exists
-    existing_user = await db.users.find_one({"username": user.username})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Username already taken")
-
-    # Hash the password before storing it
-    hashed_password = hash_password(user.password)
-    
-    user_data = {
-        "username": user.username,
-        "email": user.email,
-        "password": hashed_password
-    }
-    
-    # Save user in the database
-    await db.users.insert_one(user_data)
-    return {"message": "User registered successfully"}
-
-
-# Helper function to get the current user from the token
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    return decode_jwt(token)
-
-
-# Endpoint to create a group
-@app.post("/groups/") 
-async def create_group(group: Group, current_user: dict = Depends(get_current_user)):
-    group_data = {"name": group.name, "password": group.password, "created_by": current_user["sub"]}
-    group_collection = db.groups
-    existing_group = await group_collection.find_one({"name": group.name})
-    if existing_group:
+    if groups_collection.find_one({"group_name": group.group_name}):
         raise HTTPException(status_code=400, detail="Group already exists")
-    
-    await group_collection.insert_one(group_data)
-    return {"message": "Group created successfully"}
 
+    password = str(uuid4())[:8]
+    groups_collection.insert_one({
+        "group_name": group.group_name,
+        "password": password,
+        "members": [decoded_token["sub"]]
+    })
+    return {"message": "Group created", "group_name": group.group_name, "password": password}
 
-# Endpoint to upload a memory (photo/video)
-@app.post("/memories/") 
-async def upload_memory(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    # Check file size
-    contents = await file.read(MAX_FILE_SIZE + 1)
-    if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File too large (max 5MB)")
-    await file.seek(0)
+@app.post("/join-group")
+async def join_group(data: JoinGroup, authorization: str = Header(...)) -> Dict[str, str]:
+    """Endpoint to join an existing group."""
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
 
-    # Upload to Cloudinary
+    group = groups_collection.find_one({"group_name": data.group_name})
+    if not group or group["password"] != data.password:
+        raise HTTPException(status_code=400, detail="Invalid group or password")
+
+    groups_collection.update_one(
+        {"group_name": data.group_name},
+        {"$addToSet": {"members": decoded_token["sub"]}}
+    )
+    return {"message": f"Joined group {data.group_name} successfully"}
+
+@app.post("/upload-memory/{group_name}")
+async def upload_memory(group_name: str, file: UploadFile = File(...), authorization: str = Header(...)) -> JSONResponse:
+    """Endpoint to upload a memory (image) to Cloudinary and save the URL in the database."""
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
+
     try:
-        result = cloudinary.uploader.upload(file.file)
-        return {"url": result["secure_url"]}
+        # Log file upload attempt
+        print(f"Attempting to upload file for group: {group_name}")
+        
+        cloudinary_response = cloudinary.uploader.upload(file.file, folder="memories/")
+        file_url = cloudinary_response['secure_url']
+
+        # Log successful upload
+        print(f"Upload successful. URL: {file_url}")
     except Exception as e:
-        logger.error(f"Cloudinary upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upload to Cloudinary")
+        # Log failure and return detailed message
+        print(f"Cloudinary upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
+
+    memory_data = {
+        "group_name": group_name,
+        "url": file_url,
+        "uploader": decoded_token["sub"],
+    }
+    memories_collection.insert_one(memory_data)
+
+    return JSONResponse(content={"message": "Image uploaded successfully", "url": file_url})
 
 
-# Additional route to get group details
-@app.get("/groups/{group_name}")
-async def get_group(group_name: str):
-    group_collection = db.groups
-    group = await group_collection.find_one({"name": group_name})
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    return group
+@app.get("/memories/{group_name}")
+async def get_memories(group_name: str, authorization: str = Header(...)) -> Dict[str, List[Dict[str, str]]]:
+    """Endpoint to get all memories for a specific group."""
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
 
+    memories = list(memories_collection.find({"group_name": group_name}))
+    for memory in memories:
+        memory["_id"] = str(memory["_id"])
+    return {"data": memories}
 
-# General error handler for unexpected exceptions
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc) -> JSONResponse:
-    logger.error(f"Unhandled exception: {exc}")
+    """General exception handler."""
     return JSONResponse(
         status_code=500,
         content={"message": "An unexpected error occurred", "details": str(exc)},
     )
-
-# Root endpoint for health check
-@app.get("/")
-async def root():
-    return {"message": "API is working!"}
