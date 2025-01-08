@@ -34,9 +34,9 @@ cloudinary.config(
     api_secret=CLOUDINARY_API_SECRET
 )
 
-# Initialize MongoDB client
+# Initialize MongoDB client and specify the database
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
-db = client.get_database()
+db = client["MongoYoutube"]  # Replace with the actual database name
 
 app = FastAPI()
 
@@ -83,7 +83,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 # Endpoint to create a group
-@app.post("/groups/")
+@app.post("/groups/") 
 async def create_group(group: Group, current_user: dict = Depends(get_current_user)):
     group_data = {"name": group.name, "password": group.password, "created_by": current_user["sub"]}
     group_collection = db.groups
@@ -111,6 +111,7 @@ async def upload_memory(file: UploadFile = File(...), current_user: dict = Depen
     except Exception as e:
         logger.error(f"Cloudinary upload failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload to Cloudinary")
+
 
 # Additional route to get group details
 @app.get("/groups/{group_name}")
