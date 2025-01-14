@@ -196,6 +196,51 @@ async def get_memories(group_name: str, authorization: str = Header(...)) -> Dic
         memory["_id"] = str(memory["_id"])
     return {"data": memories}
 
+
+@app.post("/upload-pdf/{group_name}")
+async def upload_pdf(group_name: str, file: UploadFile = File(...), authorization: str = Header(...)) -> JSONResponse:
+    """Endpoint to upload a PDF to Cloudinary and save the URL in the database."""
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
+
+    try:
+        # Log file upload attempt
+        print(f"Attempting to upload PDF for group: {group_name}")
+
+        # Upload PDF to Cloudinary
+        cloudinary_response = cloudinary.uploader.upload(file.file, folder="pdfs/", resource_type="raw")
+        file_url = cloudinary_response['secure_url']
+
+        # Log successful upload
+        print(f"PDF upload successful. URL: {file_url}")
+    except Exception as e:
+        # Log failure and return detailed message
+        print(f"Cloudinary PDF upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
+
+    # Save the PDF metadata in the database
+    pdf_data = {
+        "group_name": group_name,
+        "url": file_url,
+        "uploader": decoded_token["sub"],
+        "file_name": file.filename,
+    }
+    memories_collection.insert_one(pdf_data)
+
+    return JSONResponse(content={"message": "PDF uploaded successfully", "url": file_url})
+
+@app.get("/get-pdfs/{group_name}")
+async def get_pdfs(group_name: str, authorization: str = Header(...)) -> Dict[str, List[Dict[str, str]]]:
+    """Endpoint to get all PDFs for a specific group."""
+    token = extract_token(authorization)
+    decoded_token = decode_jwt(token)
+
+    pdfs = list(memories_collection.find({"group_name": group_name}))
+    for pdf in pdfs:
+        pdf["_id"] = str(pdf["_id"])
+    return {"data": pdfs}
+
+
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc) -> JSONResponse:
     """General exception handler."""
